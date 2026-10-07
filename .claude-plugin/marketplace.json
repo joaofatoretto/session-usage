@@ -1,0 +1,15 @@
+{
+  "name": "session-usage",
+  "description": "session-usage: a quiet usage panel for Claude Code.",
+  "owner": {
+    "name": "joaofatoretto",
+    "url": "https://github.com/joaofatoretto"
+  },
+  "plugins": [
+    {
+      "name": "session-usage",
+      "source": "./",
+      "description": "A quiet panel above the prompt: your session and weekly plan usage, the context window, and a blinking Clawd."
+    }
+  ]
+}

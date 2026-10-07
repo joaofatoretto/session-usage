@@ -1,0 +1,11 @@
+{
+  "name": "session-usage",
+  "version": "0.4.0",
+  "description": "A quiet panel above the prompt: your session and weekly plan usage, the context window, and a blinking Clawd.",
+  "author": { "name": "joaofatoretto", "url": "https://github.com/joaofatoretto" },
+  "homepage": "https://github.com/joaofatoretto/session-usage",
+  "repository": "https://github.com/joaofatoretto/session-usage",
+  "license": "MIT",
+  "keywords": ["usage", "rate-limits", "context-window", "status", "mod"],
+  "types": "./types/index.d.ts"
+}
