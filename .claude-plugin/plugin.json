@@ -1,6 +1,6 @@
 {
   "name": "session-usage",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A quiet panel above the prompt: your session and weekly plan usage, the context window, and a blinking Clawd.",
   "author": { "name": "joaofatoretto", "url": "https://github.com/joaofatoretto" },
   "homepage": "https://github.com/joaofatoretto/session-usage",

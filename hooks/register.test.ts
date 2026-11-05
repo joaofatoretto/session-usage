@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bar, compactLine, daylight, fit, hasContent, parsePlanUsage, resetText, tokens, toUsage } from './register'
+import { bar, compactFitsOpeners, compactLine, daylight, fit, hasContent, parsePlanUsage, resetText, tokens, toUsage } from './register'
 
 const NOW = Date.parse('2026-10-07T12:00:00Z')
 
@@ -286,3 +286,90 @@ test('the turn-duration line gets a blank row above it', async ($, on) => {
   expect(await line.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
   expect(await line.find({ text: '✻ Worked for 2m 4s' })).toBeDefined()
 })
+
+test('the openers keep their column while any layout fits beside them', () => {
+  const usage = {
+    session: { percent: 32, resetsAt: new Date(local(2026, 10, 7, 14, 15)).toISOString() },
+    week: { percent: 41 },
+    context: { tokens: 84_000, window: 200_000, percent: 42 },
+  }
+  for (const columns of [140, 100, 85, 75]) {
+    const plan = fit(usage, NOON, columns, true)
+    expect(plan.openers).toBe(true)
+    expect(plan.columnsNeeded).toBeLessThanOrEqual(columns)
+  }
+  // Too narrow for anything with them: they give way before the panel overflows.
+  const cramped = fit(usage, NOON, 60, true)
+  expect(cramped.openers).toBe(false)
+  // Off WSL there are none.
+  expect(fit(usage, NOON, 140).openers).toBe(false)
+})
+
+test('the minimized card takes the openers only when they fit', () => {
+  const line = compactLine({ session: { percent: 32 }, context: { window: 200_000, percent: 42 } })
+  expect(compactFitsOpeners(line, 80)).toBe(true)
+  expect(compactFitsOpeners(line, 40)).toBe(false)
+})
+
+const startSession = async ($: Parameters<Parameters<typeof test>[1]>[0], on: On) => {
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.cwd', () => ({ value: '/home/me/project' }))
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+  on('session.usage', () => ({ value: { startedAt: NOW, context: { window: 200_000 }, rateLimits: [] } }))
+  on('ui.status', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/home/me/project', surface: 'terminal', isInteractive: true })
+  await $.session.measure({
+    context: { window: 200_000, tokens: 84_000, percent: 42 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 32 }],
+    changed: ['rateLimits'],
+  })
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`on WSL, VSCode and Files open the session's folder, on ${surface}`, async ($, on) => {
+    mock.clock(on, { now: NOW })
+    mock.env(on, { WSL_DISTRO_NAME: 'Ubuntu' })
+    emptyBand(on)
+    const runs: string[][] = []
+    on('process.run', ($, e) => {
+      runs.push([...e.argv])
+      const stdout = e.argv[0] === 'wslpath' ? '\\\\wsl.localhost\\Ubuntu\\home\\me\\project\n' : ''
+      // Explorer exits 1 even when it opens the window.
+      const exitCode = e.argv[0] === 'explorer.exe' ? 1 : 0
+      return { value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    })
+    const toasts: string[] = []
+    on('ui.toast', ($, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    await startSession($, on)
+    const band = await $.ui.mount({ plugin: 'session-usage', surface, component: 'AbovePrompt', props: bandProps })
+
+    await band.press({ key: 'vscode' })
+    expect(runs).toEqual([['code', '/home/me/project']])
+
+    await band.press({ key: 'files' })
+    expect(runs.slice(1)).toEqual([
+      ['wslpath', '-w', '/home/me/project'],
+      ['explorer.exe', '\\\\wsl.localhost\\Ubuntu\\home\\me\\project'],
+    ])
+    expect(toasts).toEqual([])
+
+    // Still there when minimized.
+    await band.press({ key: 'toggle' })
+    expect(await band.find({ key: 'vscode' })).toBeDefined()
+  })
+
+  test(`off WSL there are no openers, on ${surface}`, async ($, on) => {
+    mock.clock(on, { now: NOW })
+    mock.env(on, {})
+    emptyBand(on)
+    await startSession($, on)
+    const band = await $.ui.mount({ plugin: 'session-usage', surface, component: 'AbovePrompt', props: bandProps })
+    expect(await band.find({ key: 'vscode' })).toBeUndefined()
+    expect(await band.find({ key: 'files' })).toBeUndefined()
+  })
+}

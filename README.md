@@ -44,6 +44,10 @@ Press `−` at the panel's right edge to fold it into a small card, and `+` to o
 
 The buttons respond to a click in the fullscreen terminal, or from the keyboard: `ctrl+x tab` focuses the panel, then `enter`.
 
+### Open the folder in Windows (WSL)
+
+On WSL, two small buttons sit stacked beside `−`, behind a `│` divider like the context column's: **VSCode** opens the session's folder in VS Code on Windows (through `code`, so it opens as a WSL remote), and **Files** opens it in File Explorer. The minimized card shows them in its row. They take one narrow column. When the terminal is too narrow for any layout with them, they step aside before anything overflows. Outside WSL they don't show.
+
 ### A little breathing room
 
 The mod also adds one blank row above the `✻ Worked for 2m 4s` line that ends each turn, so it doesn't sit tight against the reply.
@@ -94,6 +98,7 @@ The mod is one hooks module, [`hooks/register.tsx`](hooks/register.tsx).
 ### Privacy
 
 - **One network request, at launch,** and only when Claude Code has no figures yet: a `GET` to `https://api.anthropic.com/api/oauth/usage`. It goes through `$.session.authorize()` and `$.http.fetch`, so Claude Code attaches your login itself, only for Anthropic's own host. The mod never sees the credential.
+- **Two local commands, only when you press VSCode or Files:** `code <folder>`, or `wslpath -w <folder>` then `explorer.exe <that path>`.
 - **One stored value:** whether the panel is minimized, in the mod's own plugin store.
 - Nothing else leaves your machine or is written anywhere.
 

@@ -27,6 +27,14 @@ const CHROME = 4 + 3
 const PET_COLUMNS = PET[0]!.length + 2
 const DIVIDER_COLUMNS = 5
 
+/** The buttons that open the session's folder in Windows, on WSL. */
+export const OPENERS = [
+  { key: 'vscode', label: 'VSCode', argv: (folder: string) => ['code', folder] },
+  { key: 'files', label: 'Files', argv: (folder: string) => ['explorer.exe', folder] },
+] as const
+// The openers stacked in one column behind a divider, with their gaps.
+const OPENER_COLUMNS = 1 + 2 + Math.max(...OPENERS.map(o => o.label.length)) + 2
+
 export const toUsage = (
   rateLimits: readonly SessionRateLimit[],
   cost: SessionCost | undefined,
@@ -171,18 +179,36 @@ const contextLines = (context: ContextFill, layout: Layout): Line[] => {
 
 const width = (lines: Line[]) => Math.max(0, ...lines.map(line => line.reduce((n, s) => n + s.text.length, 0)))
 
-/** The widest layout whose panel fits `columns`, with the lines it draws. */
-export const fit = (current: Usage | null, at: number, columns: number) => {
+/**
+ * The widest layout whose panel fits `columns`, with the lines it draws. With
+ * `openers`, the opener column stays while any layout fits beside it, and goes
+ * only when none does.
+ */
+export const fit = (current: Usage | null, at: number, columns: number, openers = false) => {
   const context = current?.context
-  const plans = LAYOUTS.filter(layout => !layout.context || context !== undefined).map(layout => {
-    const limits = limitLines(current, at, layout)
-    const side = layout.context && context ? contextLines(context, layout) : undefined
-    const columnsNeeded =
-      CHROME + PET_COLUMNS + width(limits) + (side ? DIVIDER_COLUMNS + width(side) : 0)
-    return { layout, limits, context: side, columnsNeeded }
-  })
+  const plansWith = (withOpeners: boolean) =>
+    LAYOUTS.filter(layout => !layout.context || context !== undefined).map(layout => {
+      const limits = limitLines(current, at, layout)
+      const side = layout.context && context ? contextLines(context, layout) : undefined
+      const columnsNeeded =
+        CHROME +
+        PET_COLUMNS +
+        width(limits) +
+        (side ? DIVIDER_COLUMNS + width(side) : 0) +
+        (withOpeners ? OPENER_COLUMNS : 0)
+      return { layout, limits, context: side, openers: withOpeners, columnsNeeded }
+    })
+  const plans = [...(openers ? plansWith(true) : []), ...plansWith(false)]
   return plans.find(plan => plan.columnsNeeded <= columns) ?? plans[plans.length - 1]!
 }
+
+/**
+ * Whether the minimized card fits `columns` with the openers in its row: the
+ * card's border and padding, the square, the line, a divider, the openers and
+ * the button, each with its gap.
+ */
+export const compactFitsOpeners = (line: Line, columns: number) =>
+  4 + 1 + 2 + width([line]) + 2 + 1 + OPENERS.reduce((n, o) => n + 2 + o.label.length, 0) + 2 + 1 <= columns
 
 const PLAN_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 
@@ -291,6 +317,29 @@ function scheduleBlink($: EngineInterface) {
   })
 }
 
+/**
+ * Opens the session's folder in a Windows app. Neither app is waited on past
+ * starting: Explorer exits 1 even when it opens, so only a failure to start
+ * says anything.
+ */
+async function openFolder($: EngineInterface, opener: (typeof OPENERS)[number]) {
+  try {
+    const folder = await $.session.cwd()
+    // Explorer needs the folder's Windows path (\\wsl.localhost\...).
+    const windowsPath =
+      opener.key === 'files' ? (await $.process.run(['wslpath', '-w', folder])).stdout.trim() : folder
+    const { exitCode, stderr } = await $.process.run(opener.argv(windowsPath || folder), { timeoutMs: 15_000 })
+    if (exitCode !== 0 && opener.key !== 'files') {
+      $.ui.toast(`${opener.label} didn't open: ${stderr.trim().split('\n')[0] || `exit ${exitCode}`}`)
+    }
+  } catch (error) {
+    $.ui.toast(`${opener.label} didn't open: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+// Set at session.start: the openers are Windows apps, so they show on WSL only.
+let isWsl = false
+
 async function toggleMinimized($: EngineInterface) {
   await update($, isMinimized, value => !value)
   await $.store.set(MINIMIZED_KEY, await read($, isMinimized))
@@ -299,6 +348,10 @@ async function toggleMinimized($: EngineInterface) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    isWsl = await $.env.get('WSL_DISTRO_NAME').then(
+      name => name !== undefined,
+      () => false,
+    )
     // Clear the status-line entry the first version of this mod pinned.
     $.ui.status(undefined)
     const current = await $.session.usage()
@@ -360,23 +413,39 @@ export const register: Register = on => {
         </Box>
       ))
 
+    const divider = (key: string, rows: number) => (
+      <Box key={key} flexDirection="column">
+        {Array.from({ length: rows }, (_, i) => (
+          <Text key={`${key}${i}`} dimColor>
+            │
+          </Text>
+        ))}
+      </Box>
+    )
+    const opener = (o: (typeof OPENERS)[number]) => (
+      <Button key={o.key} label={o.label} plain dimColor onPress={() => void openFolder($, o)} />
+    )
+
     if (await read($, isMinimized)) {
       // A card that hugs its one line: a little orange square, the two
-      // percentages, and the button to open the panel again.
+      // percentages, the openers when they fit, and the button to open the
+      // panel again.
+      const line = compactLine(current)
       return (
         <Box flexDirection="row">
           <Box key="card" flexDirection="row" borderStyle="round" borderDimColor paddingX={1} gap={2}>
             <Text key="pet" color="claude">
               ■
             </Text>
-            {draw('compact', [compactLine(current)])}
+            {draw('compact', [line])}
+            {isWsl && compactFitsOpeners(line, e.props.bodyColumns) && [divider('openersDivider', 1), ...OPENERS.map(opener)]}
             <Button key="toggle" label="+" plain dimColor onPress={() => toggleMinimized($)} />
           </Box>
         </Box>
       )
     }
 
-    const plan = fit(current, await read($, now), e.props.bodyColumns)
+    const plan = fit(current, await read($, now), e.props.bodyColumns, isWsl)
     const pet = (await read($, isBlinking)) ? PET_BLINKING : PET
 
     return (
@@ -400,18 +469,16 @@ export const register: Register = on => {
         <Box key="limits" flexDirection="column" flexGrow={1}>
           {draw('limit', plan.limits)}
         </Box>
-        {plan.context && (
-          <Box key="divider" flexDirection="column">
-            {PET.map((_, i) => (
-              <Text key={`div${i}`} dimColor>
-                │
-              </Text>
-            ))}
-          </Box>
-        )}
+        {plan.context && divider('divider', PET.length)}
         {plan.context && (
           <Box key="context" flexDirection="column">
             {draw('context', plan.context)}
+          </Box>
+        )}
+        {plan.openers && divider('openersDivider', PET.length)}
+        {plan.openers && (
+          <Box key="openers" flexDirection="column">
+            {OPENERS.map(opener)}
           </Box>
         )}
         <Button key="toggle" label="−" plain dimColor onPress={() => toggleMinimized($)} />
